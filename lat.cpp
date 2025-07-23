@@ -61,6 +61,17 @@ GLfloat sail_shininess[] = {30.0f};
 // STRUKTUR & BLUEPRINT DASAR
 // ===================================================================
 
+struct MastGeometry {
+    glm::vec3 base;
+    glm::vec3 top;
+    glm::vec3 boom_base;
+    glm::vec3 boom_tip;
+    glm::vec3 gaff_base;
+    glm::vec3 gaff_tip;
+    glm::vec3 jib_boom_base; // <-- TAMBAHKAN INI
+    glm::vec3 jib_boom_tip;  // <-- TAMBAHKAN INI
+};
+
 struct HullCrossSection
 {
     glm::vec2 P0, P1, P2, P3;
@@ -123,49 +134,87 @@ void generateBox(glm::vec3 pos, glm::vec3 size, std::vector<glm::vec3>& vert_ref
     for(int i=0; i<36; ++i) ind_ref.push_back(base_index + indices_data[i]);
 }
 
-void generateCylinder(glm::vec3 pos, float height, float radius, int sides, std::vector<glm::vec3>& vert_ref, std::vector<unsigned int>& ind_ref) {
-    int base_index = vert_ref.size();
-    vert_ref.push_back(pos);
-    vert_ref.push_back(pos + glm::vec3(0, height, 0));
+void generateCylinder(glm::vec3 pos, float height, float radius, int sides,
+                      std::vector<glm::vec3>& vert_ref,
+                      std::vector<unsigned int>& ind_ref,
+                      const glm::vec3& orientation = {0.0f, 1.0f, 0.0f})
+{
+    glm::vec3 w = glm::normalize(orientation);
+    glm::vec3 start_pos = pos;
+    glm::vec3 end_pos = pos + w * height;
 
+    int base_index = vert_ref.size();
+    
+    // --- LOGIKA BARU YANG DIJAMIN STABIL ---
+    // Metode ini memilih 'helper vector' yang dijamin tidak akan pernah sejajar dengan 'w',
+    // sehingga mencegah error 'cross product dengan vektor nol'.
+    glm::vec3 u, v;
+    if (std::abs(w.x) > 0.99f) { // Jika 'w' hampir sejajar dengan sumbu X...
+        u = glm::normalize(glm::cross(w, {0.0f, 1.0f, 0.0f})); // ...gunakan sumbu Y sebagai helper.
+    } else { // Untuk semua kasus lain (termasuk jika sejajar dengan Y atau Z)...
+        u = glm::normalize(glm::cross(w, {1.0f, 0.0f, 0.0f})); // ...gunakan sumbu X sebagai helper.
+    }
+    v = glm::cross(w, u);
+    // --- AKHIR LOGIKA BARU ---
+
+    // Sisa kode di bawah ini tidak berubah, berfungsi untuk merajut vertex menjadi silinder
     for (int i = 0; i <= sides; ++i) {
         float angle = 2.0f * M_PI * i / sides;
-        glm::vec3 offset(cos(angle) * radius, 0, sin(angle) * radius);
-        vert_ref.push_back(pos + offset);
-        vert_ref.push_back(pos + glm::vec3(0, height, 0) + offset);
+        glm::vec3 offset = radius * (cosf(angle) * u + sinf(angle) * v);
+        vert_ref.push_back(start_pos + offset);
+    }
+    for (int i = 0; i <= sides; ++i) {
+        float angle = 2.0f * M_PI * i / sides;
+        glm::vec3 offset = radius * (cosf(angle) * u + sinf(angle) * v);
+        vert_ref.push_back(end_pos + offset);
     }
 
+    int ring1_start = base_index;
+    int ring2_start = base_index + (sides + 1);
     for (int i = 0; i < sides; ++i) {
-        int i0 = base_index + 2 + i * 2;
-        int i1 = base_index + 2 + (i + 1) * 2;
-        ind_ref.push_back(i0); ind_ref.push_back(i1); ind_ref.push_back(i0 + 1);
-        ind_ref.push_back(i1); ind_ref.push_back(i1 + 1); ind_ref.push_back(i0 + 1);
+        ind_ref.push_back(ring1_start + i); ind_ref.push_back(ring2_start + i); ind_ref.push_back(ring1_start + i + 1);
+        ind_ref.push_back(ring2_start + i); ind_ref.push_back(ring2_start + i + 1); ind_ref.push_back(ring1_start + i + 1);
     }
-    
-    for (int i = 0; i < sides; ++i) {
-        int i0 = base_index + 2 + i * 2;
-        int i1 = base_index + 2 + (i + 1) * 2;
-        ind_ref.push_back(base_index); ind_ref.push_back(i0); ind_ref.push_back(i1);
-        ind_ref.push_back(base_index + 1); ind_ref.push_back(i1 + 1); ind_ref.push_back(i0 + 1);
+
+    int start_center_idx = vert_ref.size(); vert_ref.push_back(start_pos);
+    int end_center_idx = vert_ref.size(); vert_ref.push_back(end_pos);
+    for (int i = 0; i < sides; i++) {
+        ind_ref.push_back(start_center_idx); ind_ref.push_back(ring1_start + i); ind_ref.push_back(ring1_start + i + 1);
+        ind_ref.push_back(end_center_idx); ind_ref.push_back(ring2_start + i + 1); ind_ref.push_back(ring2_start + i);
     }
 }
 
 void generateRailSegment(glm::vec3 p1, glm::vec3 p2, float radius, std::vector<glm::vec3>& vert_ref, std::vector<unsigned int>& ind_ref) {
     glm::vec3 dir = p2 - p1;
-    if (glm::length(dir) < 0.001f) return;
-    glm::quat rot = glm::rotation(glm::vec3(0, 1, 0), glm::normalize(dir));
+    if (glm::length(dir) < 0.001f) return; // Hindari segmen dengan panjang nol
 
     int base_index = vert_ref.size();
-    int sides = 6;
+    int sides = 8; // Anda bisa menambah ini untuk silinder yang lebih halus
 
+    // --- Logika Baru yang Stabil ---
+    // 1. Buat sistem koordinat lokal (basis ortonormal)
+    glm::vec3 w = glm::normalize(dir);
+    glm::vec3 u;
+    // Pilih vektor 'sementara' yang tidak sejajar dengan arah (w)
+    if (std::abs(w.x) > 0.9f || std::abs(w.y) > 0.9f) {
+        u = glm::normalize(glm::cross(w, {0.0f, 0.0f, 1.0f}));
+    } else {
+        u = glm::normalize(glm::cross(w, {1.0f, 0.0f, 0.0f}));
+    }
+    glm::vec3 v = glm::cross(w, u);
+
+    // 2. Buat titik-titik (vertices) untuk kedua ujung silinder
     for (int i = 0; i <= sides; ++i) {
         float angle = 2.0f * M_PI * i / sides;
-        glm::vec3 offset(cos(angle) * radius, 0, sin(angle) * radius);
-        offset = rot * offset;
+        // Hitung offset dari pusat silinder menggunakan basis u dan v
+        // PERBAIKAN: Gunakan cosf dan sinf untuk konsistensi tipe data float
+        glm::vec3 offset = radius * (cosf(angle) * u + sinf(angle) * v);
         vert_ref.push_back(p1 + offset);
         vert_ref.push_back(p2 + offset);
     }
+    // ----------------------------
 
+    // 3. Buat segitiga (indices) untuk menyatukan titik-titik tersebut
     for (int i = 0; i < sides; ++i) {
         int i0 = base_index + i * 2;
         int i1 = base_index + (i + 1) * 2;
@@ -256,94 +305,465 @@ void generateHullAndDeck() {
     }
 }
 
-void generateMastsAndSpars() {
-    // REVISI: Tiang-tiang ditinggikan secara signifikan
-    glm::vec3 foremast_pos = {0.0f, getDeckYAtZ(12.0f), 12.0f};
-    float foremast_height = 45.0f; // Ditinggikan
-    glm::vec3 mainmast_pos = {0.0f, getDeckYAtZ(-12.0f), -12.0f};
-    float mainmast_height = 40.0f; // Ditinggikan
-    
-    generateCylinder(foremast_pos, foremast_height, 0.45f, 16, vertices, indices);
-    generateCylinder(mainmast_pos, mainmast_height, 0.4f, 16, vertices, indices);
+glm::vec3 generateBowspritPlatform() {
+     float rope_radius = 0.05f;
+    float post_radius = 0.06f;
 
-    // Spreaders disesuaikan
-    generateBox({-3.0f, foremast_pos.y + 22.0f, foremast_pos.z - 0.2f}, {6.0f, 0.3f, 0.4f}, vertices, indices);
-    generateBox({-2.5f, mainmast_pos.y + 20.0f, mainmast_pos.z - 0.2f}, {5.0f, 0.3f, 0.4f}, vertices, indices);
+    // --- 1. Definisi Titik Kunci (DIREVISI) ---
+    // REVISI: Posisi platform diturunkan agar tidak bertabrakan dengan layar.
+    glm::vec3 base_pos = {0.0f, getDeckYAtZ(25.0f) + 0.2f, 25.0f}; // Y diturunkan
+    glm::vec3 tip_pos = {0.0f, base_pos.y + 1.0f, 45.0f};       // Y disesuaikan
 
-    glm::vec3 bowsprit_base = {0.0f, getDeckYAtZ(25.0f) + 0.8f, 25.0f};
-    glm::vec3 bowsprit_tip = {0.0f, bowsprit_base.y + 2.0f, 40.0f};
-    generateRailSegment(bowsprit_base, bowsprit_tip, 0.3f, vertices, indices);
-    generateRailSegment(bowsprit_tip, {0.0f, getDeckYAtZ(25.0f) - 2.0f, 26.0f}, 0.05f, vertices, indices);
-    generateRailSegment({0.0f, getDeckYAtZ(25.0f) - 2.0f, 26.0f}, {2.0f, getDeckYAtZ(24.0f), 24.0f}, 0.05f, vertices, indices);
-    generateRailSegment({0.0f, getDeckYAtZ(25.0f) - 2.0f, 26.0f}, {-2.0f, getDeckYAtZ(24.0f), 24.0f}, 0.05f, vertices, indices);
+    // --- 2. Spar Utama Bowsprit ---
+    generateRailSegment(base_pos, tip_pos, 0.3f, vertices, indices);
+
+    // --- 3. Platform dengan Papan Individual (DIREVISI) ---
+    // REVISI: Mengganti platform solid dengan papan individual untuk detail maksimal.
+    float plank_width = 0.2f;
+    float plank_gap = 0.05f;
+    float platform_half_width = 1.0f;
+    float plank_height = 0.08f;
     
-    // Lampu Navigasi
-    generateCylinder(foremast_pos + glm::vec3(0, foremast_height, 0), 0.3f, 0.15f, 8, vertices, indices);
-    generateCylinder(mainmast_pos + glm::vec3(0, mainmast_height, 0), 0.3f, 0.15f, 8, vertices, indices);
+    // Loop untuk membuat papan dari belakang ke depan
+    for (float z_offset = 1.0f; z_offset < 15.0f; z_offset += (plank_width + plank_gap)) {
+        // Interpolasi untuk mendapatkan posisi dan lebar papan saat ini
+        float t = z_offset / 15.0f;
+        glm::vec3 plank_center = glm::mix(base_pos, tip_pos, t);
+        float current_width = glm::mix(platform_half_width, 0.4f, t);
+
+        // Buat sepasang papan (kiri dan kanan dari spar utama)
+        generateBox({-current_width, plank_center.y - plank_height/2, plank_center.z}, {current_width - 0.15f, plank_height, plank_width}, vertices, indices);
+        generateBox({0.15f, plank_center.y - plank_height/2, plank_center.z}, {current_width - 0.15f, plank_height, plank_width}, vertices, indices);
+    }
+
+    // --- 4. Tiang Pagar (Stanchions) ---
+    float rail_height = 1.0f;
+    std::vector<glm::vec3> stanchion_tops;
+    
+    // Titik-titik dasar pagar mengikuti bentuk luar platform
+    std::vector<glm::vec3> stanchion_bases;
+    for (int i = 0; i < 5; ++i) {
+        float t = i / 4.0f;
+        float current_width = glm::mix(platform_half_width, 0.4f, t);
+        glm::vec3 base_center = glm::mix(base_pos, tip_pos, t * 0.8f);
+        stanchion_bases.push_back({-current_width, base_center.y, base_center.z});
+    }
+     for (int i = 4; i >= 0; --i) {
+        float t = i / 4.0f;
+        float current_width = glm::mix(platform_half_width, 0.4f, t);
+        glm::vec3 base_center = glm::mix(base_pos, tip_pos, t * 0.8f);
+        stanchion_bases.push_back({current_width, base_center.y, base_center.z});
+    }
+
+    for(const auto& base : stanchion_bases) {
+        generateCylinder(base, rail_height, post_radius, 6, vertices, indices);
+        stanchion_tops.push_back(base + glm::vec3(0, rail_height, 0));
+    }
+    
+    // --- 5. Pagar Horizontal (Kompleks) ---
+    for(size_t i = 0; i < stanchion_tops.size() - 1; ++i) {
+        glm::vec3 current_top = stanchion_tops[i];
+        glm::vec3 next_top = stanchion_tops[i+1];
+        
+        generateRailSegment(current_top, next_top, rope_radius, vertices, indices); // Pagar atas
+        generateRailSegment(current_top - glm::vec3(0, rail_height / 2, 0), next_top - glm::vec3(0, rail_height / 2, 0), rope_radius, vertices, indices); // Pagar tengah
+    }
+
+    // --- 6. Mengembalikan posisi penting ---
+    return tip_pos; 
 }
 
+// ===================================================================
+// FUNGSI BARU: GENERATE SPARS UNTUK RIG PHINISI (DINAMIS)
+// ===================================================================
+MastGeometry generateSingleMast(glm::vec3 base_pos, float height, bool is_foremast) {
+    MastGeometry geo;
+    geo.base = base_pos;
+    geo.top = base_pos + glm::vec3(0, height, 0);
+
+    float boom_radius = 0.25f;
+    float gaff_radius = 0.22f;
+
+    if (is_foremast) { // Tiang Depan
+        geo.boom_base = geo.base + glm::vec3(0, 4.5f, 0);
+        geo.boom_tip  = {0.0f, geo.boom_base.y + 1.0f, -8.0f};
+        geo.gaff_base = geo.base + glm::vec3(0, height * 0.88f, 0);
+        geo.gaff_tip  = {0.0f, geo.gaff_base.y + 6.0f, -4.0f};
+        geo.jib_boom_base = geo.base + glm::vec3(0, 2.0f, 0);
+        geo.jib_boom_tip  = {0.0f, geo.jib_boom_base.y + 0.2f, 26.0f};
+    } else { // Tiang Utama (Belakang)
+        geo.boom_base = geo.base + glm::vec3(0, 4.0f, 0);
+        geo.boom_tip  = {0.0f, geo.boom_base.y + 1.0f, -28.0f};
+        geo.gaff_base = geo.base + glm::vec3(0, height * 0.85f, 0);
+        geo.gaff_tip  = {0.0f, geo.gaff_base.y + 5.0f, -25.0f};
+    }
+    
+    // Generate geometri LURUS
+    generateCylinder(geo.base, height, 0.45f, 16, vertices, indices);
+    generateRailSegment(geo.boom_base, geo.boom_tip, boom_radius, vertices, indices);
+    generateRailSegment(geo.gaff_base, geo.gaff_tip, gaff_radius, vertices, indices);
+    generateRailSegment(geo.jib_boom_base, geo.jib_boom_tip, boom_radius * 0.8f, vertices, indices);
+    
+    return geo;
+}
+
+
+
 void generateSails() {
-    glm::vec3 mainmast_pos = {0.0f, getDeckYAtZ(-12.0f), -12.0f};
+    // --- Ambil kembali posisi-posisi penting ---
     glm::vec3 foremast_pos = {0.0f, getDeckYAtZ(12.0f), 12.0f};
-    glm::vec3 bowsprit_tip = {0.0f, getDeckYAtZ(25.0f) + 2.8f, 40.0f};
+    float foremast_height = 45.0f;
+    glm::vec3 foremast_top = foremast_pos + glm::vec3(0, foremast_height, 0);
 
-    // REVISI: Ketinggian puncak tiang disesuaikan
-    glm::vec3 mainmast_top = mainmast_pos + glm::vec3(0, 40.0f, 0);
-    glm::vec3 foremast_top = foremast_pos + glm::vec3(0, 45.0f, 0);
+    glm::vec3 mainmast_pos = {0.0f, getDeckYAtZ(-12.0f), -12.0f};
+    float mainmast_height = 40.0f;
+    glm::vec3 mainmast_top = mainmast_pos + glm::vec3(0, mainmast_height, 0);
 
-    // REVISI: Layar Utama Belakang (Segitiga), posisi boom dinaikkan
-    glm::vec3 main_p0 = mainmast_top;
-    glm::vec3 main_p1 = mainmast_pos + glm::vec3(0, 4.0f, 0); // Dinaikkan agar tidak menimpa kabin
-    glm::vec3 main_p2 = {0.0f, main_p1.y, -23.0f};
-    generateRailSegment(main_p1, main_p2, 0.25f, vertices, indices); // Boom
-    generateSailMesh(main_p0, main_p1, main_p2, main_p2, 15, sail_vertices, sail_indices);
+    glm::vec3 bowsprit_tip = {0.0f, getDeckYAtZ(25.0f) + 2.8f, 45.0f}; // Posisi ujung bowsprit baru
 
-    // REVISI: Satu layar segitiga di belakang tiang depan (Foresail)
-    glm::vec3 fore_p0 = foremast_top;
-    glm::vec3 fore_p1 = foremast_pos + glm::vec3(0, 1.5f, 0);
-    glm::vec3 fore_p2 = {0.0f, fore_p1.y, -2.0f};
-    generateRailSegment(fore_p1, fore_p2, 0.25f, vertices, indices); // Boom
-    generateSailMesh(fore_p0, fore_p1, fore_p2, fore_p2, 15, sail_vertices, sail_indices);
+    // Titik-titik spar yang sudah kita definisikan di generateMastsAndSpars_Phinisi()
+    glm::vec3 mainmast_boom_base = mainmast_pos + glm::vec3(0, 4.0f, 0);
+    glm::vec3 mainmast_boom_tip  = {0.0f, mainmast_boom_base.y + 1.0f, -24.0f};
+    glm::vec3 mainmast_gaff_base = mainmast_pos + glm::vec3(0, mainmast_height * 0.85f, 0);
+    glm::vec3 mainmast_gaff_tip  = {0.0f, mainmast_gaff_base.y + 5.0f, -20.0f};
+
+    glm::vec3 foremast_boom_base = foremast_pos + glm::vec3(0, 4.5f, 0);
+    glm::vec3 foremast_boom_tip  = {0.0f, foremast_boom_base.y + 1.0f, -3.0f};
+    glm::vec3 foremast_gaff_base = foremast_pos + glm::vec3(0, foremast_height * 0.88f, 0);
+    glm::vec3 foremast_gaff_tip  = {0.0f, foremast_gaff_base.y + 6.0f, 2.0f};
+    
+    int divisions = 20; // Tingkatkan divisi untuk layar yang lebih halus
+
+    // === LAYAR UTAMA (GAFF SAILS) - 2 Buah ===
+    // Penjelasan parameter generateSailMesh(P0, P1, P2, P3):
+    // P0: Sudut atas-belakang (ujung gaff)
+    // P1: Sudut bawah-belakang (ujung boom)
+    // P2: Sudut bawah-depan (pangkal boom di tiang)
+    // P3: Sudut atas-depan (pangkal gaff di tiang)
+
+    // 1. Layar Utama Belakang (Mainsail)
+    generateSailMesh(mainmast_gaff_tip, mainmast_boom_tip, mainmast_boom_base, mainmast_gaff_base, divisions, sail_vertices, sail_indices);
+
+    // 2. Layar Utama Depan (Foresail)
+    generateSailMesh(foremast_gaff_tip, foremast_boom_tip, foremast_boom_base, foremast_gaff_base, divisions, sail_vertices, sail_indices);
+
+    // === LAYAR ATAS (TOPSAILS) - 2 Buah ===
+    // Ini adalah layar segitiga di atas gaff. Kita buat dengan duplikasi titik.
+    
+    // 3. Layar Atas Belakang (Main Topsail)
+    generateSailMesh(mainmast_top, mainmast_gaff_tip, mainmast_gaff_base, mainmast_top, divisions, sail_vertices, sail_indices);
+
+    // 4. Layar Atas Depan (Fore Topsail)
+    generateSailMesh(foremast_top, foremast_gaff_tip, foremast_gaff_base, foremast_top, divisions, sail_vertices, sail_indices);
 
     // REVISI: Dua Layar Jib di Depan Tiang Depan
     glm::vec3 jib_clew = {0.0f, getDeckYAtZ(20.0f) + 1.0f, 20.0f};
+    
     generateSailMesh(foremast_top, jib_clew, bowsprit_tip, bowsprit_tip, 12, sail_vertices, sail_indices);
     generateSailMesh({foremast_top.x, foremast_top.y - 15.0f, foremast_pos.z}, jib_clew, {bowsprit_tip.x, bowsprit_tip.y-1.0f, bowsprit_tip.z - 12.0f}, {bowsprit_tip.x, bowsprit_tip.y-1.0f, bowsprit_tip.z - 12.0f}, 12, sail_vertices, sail_indices);
 }
 
-void generateRiggingAndDetails() {
-    float rope_radius = 0.05f;
-    float thin_rope_radius = 0.03f;
+// ===================================================================
+// FUNGSI BARU: GENERATE TANGGA TIANG SECARA DINAMIS
+// ===================================================================
+void generateMastLadder(glm::vec3 mast_base, float mast_height, float mast_radius, 
+                      const glm::vec3& orientation, // <-- PARAMETER BARU
+                      std::vector<glm::vec3>& vert_ref, std::vector<unsigned int>& ind_ref) {
+    std::cout << "    -> Membangun tangga kayu untuk tiang dengan orientasi kustom..." << std::endl;
 
-    glm::vec3 mainmast_pos = {0.0f, getDeckYAtZ(-12.0f), -12.0f};
-    glm::vec3 foremast_pos = {0.0f, getDeckYAtZ(12.0f), 12.0f};
-    glm::vec3 bowsprit_tip = {0.0f, getDeckYAtZ(25.0f) + 2.8f, 40.0f};
-    glm::vec3 mainmast_top = mainmast_pos + glm::vec3(0, 40.0f, 0);
-    glm::vec3 foremast_top = foremast_pos + glm::vec3(0, 45.0f, 0);
+    // --- Parameter Tangga (Bisa Anda sesuaikan) ---
+    const float LADDER_WIDTH = 0.5f;
+    const float RAIL_RADIUS = 0.04f;
+    const float RUNG_RADIUS = 0.03f;
+    const float RUNG_SPACING = 0.4f;
+    const float STANDOFF_DISTANCE = 0.1f;
 
-    // Tali Utama
-    generateRailSegment(foremast_top, bowsprit_tip, rope_radius, vertices, indices);
-    generateRailSegment(mainmast_top, foremast_top, rope_radius, vertices, indices);
-    generateRailSegment(mainmast_top, {0.0f, getDeckYAtZ(-25.0f), -25.0f}, rope_radius, vertices, indices);
+    // --- Kalkulasi Posisi (DIREVISI) ---
+    // Vektor yang menentukan arah tangga menjauhi tiang (misal, ke depan atau ke samping)
+    const glm::vec3 standoff_vec = glm::normalize(orientation); 
+    // Vektor samping, dihitung agar selalu tegak lurus dengan arah standoff
+    const glm::vec3 side_vec = glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), standoff_vec));
 
-    // Tali Kompleks dengan Spreader
-    auto generateComplexShrouds = [&](glm::vec3 mast_pos, float mast_height, float deck_y, float z_pos, float width, float spreader_y, float spreader_width) {
-        glm::vec3 spreader_left = {-spreader_width/2, spreader_y, z_pos};
-        glm::vec3 spreader_right = {spreader_width/2, spreader_y, z_pos};
-        glm::vec3 deck_left = {-width/2, deck_y, z_pos};
-        glm::vec3 deck_right = {width/2, deck_y, z_pos};
-        glm::vec3 mast_top = mast_pos + glm::vec3(0, mast_height, 0);
+    // Posisi dasar untuk tiang tangga kiri dan kanan
+    glm::vec3 ladder_center_base = mast_base + standoff_vec * (mast_radius + STANDOFF_DISTANCE);
+    glm::vec3 left_rail_base = ladder_center_base - side_vec * (LADDER_WIDTH / 2.0f);
+    glm::vec3 right_rail_base = ladder_center_base + side_vec * (LADDER_WIDTH / 2.0f);
 
-        generateRailSegment(mast_top, spreader_left, thin_rope_radius, vertices, indices);
-        generateRailSegment(mast_top, spreader_right, thin_rope_radius, vertices, indices);
-        generateRailSegment(spreader_left, deck_left, thin_rope_radius, vertices, indices);
-        generateRailSegment(spreader_right, deck_right, thin_rope_radius, vertices, indices);
-        generateRailSegment(mast_pos + glm::vec3(0, spreader_y, 0), deck_left, thin_rope_radius, vertices, indices);
-        generateRailSegment(mast_pos + glm::vec3(0, spreader_y, 0), deck_right, thin_rope_radius, vertices, indices);
+    // Titik atas tiang tangga
+    glm::vec3 left_rail_top = left_rail_base + glm::vec3(0, mast_height, 0);
+    glm::vec3 right_rail_top = right_rail_base + glm::vec3(0, mast_height, 0);
+
+    // --- Generate Geometri (Tidak ada perubahan di sini) ---
+    // 1. Buat dua tiang vertikal tangga
+    generateRailSegment(left_rail_base, left_rail_top, RAIL_RADIUS, vert_ref, ind_ref);
+    generateRailSegment(right_rail_base, right_rail_top, RAIL_RADIUS, vert_ref, ind_ref);
+
+    // 2. Buat anak tangga secara berulang dari bawah ke atas
+    int num_rungs = static_cast<int>(mast_height / RUNG_SPACING);
+    for (int i = 1; i < num_rungs; ++i) {
+        float current_height = i * RUNG_SPACING;
+        glm::vec3 rung_left_pos = left_rail_base + glm::vec3(0, current_height, 0);
+        glm::vec3 rung_right_pos = right_rail_base + glm::vec3(0, current_height, 0);
+        
+        generateRailSegment(rung_left_pos, rung_right_pos, RUNG_RADIUS, vert_ref, ind_ref);
+    }
+}
+
+// ===================================================================
+// FUNGSI BARU: GENERATE JARING BOWSPRIT DENGAN EFEK LENDUTAN
+// ===================================================================
+void generateSideNetting(bool is_right_side, std::vector<glm::vec3>& vert_ref, std::vector<unsigned int>& ind_ref) {
+    std::cout << "    -> Merajut jaring samping yang realistis..." << std::endl;
+
+    // --- Parameter Jaring (Silakan bereksperimen) ---
+    const float NET_LENGTH = 15.0f;     // Panjang jaring di sepanjang kapal
+    const float NET_HEIGHT = 4.0f;      // Tinggi jaring dari atas ke bawah
+    const int NUM_ROPES_Z = 20;         // Jumlah tali vertikal
+    const int NUM_ROPES_Y = 8;          // Jumlah tali horizontal
+    const float ROPE_RADIUS = 0.03f;
+    const float SAG_Y = 0.5f;           // Lendutan ke bawah
+    const float SAG_X = 0.4f;           // Gembungan ke luar dari lambung
+    const float RANDOMNESS = 0.05f;     // Tingkat ketidakberaturan (0 untuk non-aktif)
+    
+    // --- Posisi Awal Jaring ---
+    const float start_z = -5.0f;
+    float side_multiplier = is_right_side ? 1.0f : -1.0f;
+
+    auto getNetNode = [&](float t_z, float t_y) {
+        // t_z: 0 (belakang) -> 1 (depan)
+        // t_y: 0 (atas) -> 1 (bawah)
+
+        float current_z = start_z + t_z * NET_LENGTH;
+        
+        // Titik jangkar atas jaring, mengikuti bentuk pagar dek
+        glm::vec3 anchor_point;
+        anchor_point.z = current_z;
+        anchor_point.y = getDeckYAtZ(current_z) + 0.8f; // Mengikuti tinggi pagar
+        anchor_point.x = getDeckWidthAtZ(current_z) * side_multiplier;
+
+        // Titik dasar pada jaring sebelum efek fisika
+        glm::vec3 point = anchor_point - glm::vec3(0.0f, t_y * NET_HEIGHT, 0.0f);
+
+        // --- APLIKASI EFEK FISIKA UNTUK REALISME ---
+        // 1. Lendutan ke Bawah (Y-axis): paling rendah di tengah panjang jaring
+        point.y -= SAG_Y * sinf(t_z * M_PI);
+
+        // 2. Gembungan ke Luar (X-axis): paling gembung di bagian bawah jaring
+        float outward_sag = SAG_X * sinf(t_y * M_PI / 2.0f);
+        point.x += outward_sag * side_multiplier;
+
+        // 3. Ketidaksempurnaan Acak: membuat jaring tidak kaku
+        if (RANDOMNESS > 0.0f) {
+            auto random_offset = [&]() { return (static_cast<float>(rand()) / RAND_MAX - 0.5f) * 2.0f * RANDOMNESS; };
+            point += glm::vec3(random_offset(), random_offset(), random_offset());
+        }
+
+        return point;
     };
 
-    generateComplexShrouds(foremast_pos, 45.0f, getDeckYAtZ(12.0f) + 0.8f, 12.0f, 8.0f, foremast_pos.y + 22.0f, 6.0f);
-    generateComplexShrouds(mainmast_pos, 40.0f, getDeckYAtZ(-12.0f) + 0.8f, -12.0f, 7.5f, mainmast_pos.y + 20.0f, 5.0f);
+    // --- Generate Geometri Tali (mirip seperti sebelumnya) ---
+    // 1. Tali Vertikal
+    for (int i = 0; i <= NUM_ROPES_Y; ++i) {
+        float t_y = static_cast<float>(i) / NUM_ROPES_Y;
+        for (int j = 0; j < NUM_ROPES_Z; ++j) {
+            float t_z1 = static_cast<float>(j) / NUM_ROPES_Z;
+            float t_z2 = static_cast<float>(j + 1) / NUM_ROPES_Z;
+            generateRailSegment(getNetNode(t_z1, t_y), getNetNode(t_z2, t_y), ROPE_RADIUS, vert_ref, ind_ref);
+        }
+    }
+    // 2. Tali Horizontal
+    for (int i = 0; i <= NUM_ROPES_Z; ++i) {
+        float t_z = static_cast<float>(i) / NUM_ROPES_Z;
+        for (int j = 0; j < NUM_ROPES_Y; ++j) {
+            float t_y1 = static_cast<float>(j) / NUM_ROPES_Y;
+            float t_y2 = static_cast<float>(j + 1) / NUM_ROPES_Y;
+            generateRailSegment(getNetNode(t_z, t_y1), getNetNode(t_z, t_y2), ROPE_RADIUS, vert_ref, ind_ref);
+        }
+    }
+}
+// ===================================================================
+// FUNGSI UTILITAS BARU: GENERATE SILINDER DENGAN ORIENTASI APAPUN
+// ===================================================================
+void generateOrientedCylinder(glm::vec3 start_pos, glm::vec3 end_pos, float radius, int sides, std::vector<glm::vec3>& vert_ref, std::vector<unsigned int>& ind_ref) {
+    glm::vec3 dir = end_pos - start_pos;
+    if (glm::length(dir) < 0.001f) return;
+
+    int base_index = vert_ref.size();
+    
+    // Buat sistem koordinat lokal yang robust
+    glm::vec3 w = glm::normalize(dir);
+    glm::vec3 u = (std::abs(w.y) > 0.99f) ? glm::normalize(glm::cross(w, {0.0f, 0.0f, 1.0f})) : glm::normalize(glm::cross(w, {0.0f, 1.0f, 0.0f}));
+    glm::vec3 v = glm::cross(w, u);
+
+    // Buat vertices untuk kedua lingkaran (awal dan akhir)
+    for (int i = 0; i <= sides; ++i) {
+        float angle = 2.0f * M_PI * i / sides;
+        glm::vec3 offset = radius * (cosf(angle) * u + sinf(angle) * v);
+        vert_ref.push_back(start_pos + offset);
+    }
+    for (int i = 0; i <= sides; ++i) {
+        float angle = 2.0f * M_PI * i / sides;
+        glm::vec3 offset = radius * (cosf(angle) * u + sinf(angle) * v);
+        vert_ref.push_back(end_pos + offset);
+    }
+
+    // Buat indices untuk dinding silinder
+    int ring1_start = base_index;
+    int ring2_start = base_index + (sides + 1);
+    for (int i = 0; i < sides; ++i) {
+        ind_ref.push_back(ring1_start + i); ind_ref.push_back(ring2_start + i); ind_ref.push_back(ring1_start + i + 1);
+        ind_ref.push_back(ring2_start + i); ind_ref.push_back(ring2_start + i + 1); ind_ref.push_back(ring1_start + i + 1);
+    }
+
+    // Buat indices untuk tutup silinder (opsional, tapi bagus untuk porthole)
+    int start_center_idx = vert_ref.size(); vert_ref.push_back(start_pos);
+    int end_center_idx = vert_ref.size(); vert_ref.push_back(end_pos);
+    for (int i = 0; i < sides; i++) {
+        ind_ref.push_back(start_center_idx); ind_ref.push_back(ring1_start + i); ind_ref.push_back(ring1_start + i + 1);
+        ind_ref.push_back(end_center_idx); ind_ref.push_back(ring2_start + i + 1); ind_ref.push_back(ring2_start + i);
+    }
+}
+// ===================================================================
+// FUNGSI UPGRADE (V2.0): GENERATE DECKHOUSE MEWAH DAN DETAIL
+// ===================================================================
+void generateDeckhouse() {
+    std::cout << "    -> Finalisasi Deckhouse: Memperbaiki jendela dan menambah tangga..." << std::endl;
+
+    // --- Parameter & Posisi Utama ---
+    glm::vec3 base_pos = {-3.0f, getDeckYAtZ(2.5f), -4.0f};
+    glm::vec3 body_size = {6.0f, 2.5f, 9.0f};
+    float wall_thickness = 0.15f;
+
+    // --- 1 & 2. Dinding dan Pintu (DIPERBAIKI) ---
+    // Dinding Kiri
+    generateBox(base_pos, {wall_thickness, body_size.y, body_size.z}, vertices, indices); // <-- PERBAIKAN
+    // Dinding Belakang
+    generateBox(base_pos + glm::vec3(wall_thickness, 0, 0), {body_size.x - wall_thickness*2, body_size.y, wall_thickness}, vertices, indices);
+    // Dinding Depan
+    generateBox(base_pos + glm::vec3(wall_thickness, 0, body_size.z - wall_thickness), {body_size.x - wall_thickness*2, body_size.y, wall_thickness}, vertices, indices);
+    
+    // Dinding Kanan (dengan bukaan untuk pintu)
+    float door_width = 1.2f;
+    float door_height = 2.0f;
+    float door_pos_z = 3.5f;
+    glm::vec3 right_wall_pos = base_pos + glm::vec3(body_size.x - wall_thickness, 0, 0);
+    generateBox(right_wall_pos, {wall_thickness, body_size.y, door_pos_z}, vertices, indices);
+    generateBox(right_wall_pos + glm::vec3(0,0,door_pos_z + door_width), {wall_thickness, body_size.y, body_size.z - (door_pos_z + door_width)}, vertices, indices);
+    generateBox(right_wall_pos + glm::vec3(0, door_height, door_pos_z), {wall_thickness, body_size.y - door_height, door_width}, vertices, indices);
+
+    // Pintu Masuk Detail
+    glm::vec3 door_pos = right_wall_pos + glm::vec3(0, 0, door_pos_z);
+    generateBox(door_pos, {wall_thickness, door_height, door_width}, vertices, indices);
+    // Handle Pintu (tidak berubah)
+    glm::vec3 handle_pos = door_pos + glm::vec3(wall_thickness/2, door_height/2, door_width - 0.2f);
+    generateRailSegment(handle_pos, handle_pos + glm::vec3(0.1f, 0, 0), 0.03f, vertices, indices);
+
+    // --- 3. Jendela Bundar Klasik (tidak berubah) ---
+    float porthole_radius = 0.4f;
+    for(int i=0; i<2; ++i) {
+        glm::vec3 p_center = base_pos + glm::vec3(wall_thickness/2, 1.5f, 2.5f + i * 4.0f);
+        generateOrientedCylinder(p_center - glm::vec3(wall_thickness,0,0), p_center + glm::vec3(wall_thickness,0,0), porthole_radius, 16, vertices, indices);
+    }
+    glm::vec3 p_center_right = right_wall_pos + glm::vec3(-wall_thickness/2, 1.5f, body_size.z - 2.5f);
+    generateOrientedCylinder(p_center_right - glm::vec3(wall_thickness,0,0), p_center_right + glm::vec3(wall_thickness,0,0), porthole_radius, 16, vertices, indices);
+
+
+    // --- 4. Atap dengan Detail Railing (DIPERBAIKI) ---
+    glm::vec3 roof_pos = base_pos + glm::vec3(-0.2f, body_size.y, -0.2f);
+    glm::vec3 roof_size = {body_size.x + 0.4f, 0.2f, body_size.z + 0.4f};
+    generateBox(roof_pos, roof_size, vertices, indices); // <-- PERBAIKAN
+    // Sisanya tidak berubah
+    float rail_height = 0.5f; float post_radius = 0.04f;
+    std::vector<glm::vec3> rail_posts;
+    rail_posts.push_back(roof_pos + glm::vec3(post_radius, roof_size.y, post_radius));
+    rail_posts.push_back(roof_pos + glm::vec3(roof_size.x - post_radius, roof_size.y, post_radius));
+    rail_posts.push_back(roof_pos + glm::vec3(roof_size.x - post_radius, roof_size.y, roof_size.z - post_radius));
+    rail_posts.push_back(roof_pos + glm::vec3(post_radius, roof_size.y, roof_size.z - post_radius));
+    for(const auto& post_base : rail_posts) { generateCylinder(post_base, rail_height, post_radius, 8, vertices, indices); }
+    for(size_t i=0; i<rail_posts.size(); ++i) {
+        glm::vec3 p1 = rail_posts[i] + glm::vec3(0,rail_height,0);
+        glm::vec3 p2 = rail_posts[(i+1) % rail_posts.size()] + glm::vec3(0,rail_height,0);
+        generateRailSegment(p1, p2, post_radius * 0.8f, vertices, indices);
+    }
+    
+    // --- 5. Tangga Menuju Atap (tidak berubah) ---
+    float ladder_width = 0.6f;
+    float rung_radius = 0.03f;
+    glm::vec3 ladder_back_base = base_pos + glm::vec3(body_size.x/2, 0, -0.1f);
+    glm::vec3 ladder_back_top = ladder_back_base + glm::vec3(0, body_size.y, 0);
+    generateRailSegment(ladder_back_base - glm::vec3(ladder_width/2,0,0), ladder_back_top - glm::vec3(ladder_width/2,0,0), rung_radius, vertices, indices);
+    generateRailSegment(ladder_back_base + glm::vec3(ladder_width/2,0,0), ladder_back_top + glm::vec3(ladder_width/2,0,0), rung_radius, vertices, indices);
+    for(float y=0.3f; y < body_size.y; y += 0.4f) {
+        generateRailSegment(ladder_back_base - glm::vec3(ladder_width/2,-y,0), ladder_back_base + glm::vec3(ladder_width/2,y,0), rung_radius, vertices, indices);
+    }
+    glm::vec3 ladder_front_base = base_pos + glm::vec3(body_size.x/2, 0, body_size.z + 0.1f);
+    glm::vec3 ladder_front_top = ladder_front_base + glm::vec3(0, body_size.y, 0);
+    generateRailSegment(ladder_front_base - glm::vec3(ladder_width/2,0,0), ladder_front_top - glm::vec3(ladder_width/2,0,0), rung_radius, vertices, indices);
+    generateRailSegment(ladder_front_base + glm::vec3(ladder_width/2,0,0), ladder_front_top + glm::vec3(ladder_width/2,0,0), rung_radius, vertices, indices);
+    for(float y=0.3f; y < body_size.y; y += 0.4f) {
+        generateRailSegment(ladder_front_base - glm::vec3(ladder_width/2,-y,0), ladder_front_base + glm::vec3(ladder_width/2,y,0), rung_radius, vertices, indices);
+    }
+}
+
+// ===================================================================
+// FUNGSI BARU: GENERATE RIGGING PHINISI (PRESISI & DINAMIS)
+// ===================================================================
+void generateRigging_Phinisi(const MastGeometry& foremast, const MastGeometry& mainmast, const glm::vec3& bowsprit_tip) {
+    float rope_radius = 0.05f;
+    float thin_rope_radius = 0.03f;
+    
+   
+
+    // --- STANDING RIGGING (Tali Penopang Statis) ---
+    std::cout << "  - Memasang Standing Rigging..." << std::endl;
+    // 1. Forestay (Top tiang depan ke ujung bowsprit)
+    generateRailSegment(foremast.top, bowsprit_tip, rope_radius, vertices, indices);
+    // 2. Springstay (Antar puncak tiang)
+    generateRailSegment(mainmast.top, foremast.top, rope_radius, vertices, indices);
+    // 3. Main Backstay (Top tiang utama ke buritan)
+    generateRailSegment(mainmast.top, {0.0f, getDeckYAtZ(-25.0f) + 2.0f, -25.0f}, rope_radius, vertices, indices);
+
+    // 4. Shrouds (Tali samping penopang tiang)
+    // Menggunakan lambda yang sudah cerdas dari kode Anda, tapi dengan data dinamis
+    auto generateShrouds = [&](const MastGeometry& mast, float deck_width){
+        float hull_attachment_width = deck_width + 0.3f; // Di luar pagar
+        float hull_attachment_y = mast.base.y - 1.0f;
+
+        glm::vec3 deck_left = {-hull_attachment_width, hull_attachment_y, mast.base.z};
+        glm::vec3 deck_right = {hull_attachment_width, hull_attachment_y, mast.base.z};
+        
+        // Buat Chainplate (kotak kecil di lambung)
+        generateBox({deck_left.x - 0.1f, deck_left.y - 0.2f, deck_left.z - 0.5f}, {0.2f, 0.4f, 1.0f}, vertices, indices);
+        generateBox({deck_right.x - 0.1f, deck_right.y - 0.2f, deck_right.z - 0.5f}, {0.2f, 0.4f, 1.0f}, vertices, indices);
+        
+        // Tambatkan tali ke Chainplate
+        generateRailSegment(mast.top, deck_left, thin_rope_radius, vertices, indices);
+        generateRailSegment(mast.top, deck_right, thin_rope_radius, vertices, indices);
+    };
+    generateShrouds(foremast, getDeckWidthAtZ(foremast.base.z));
+    generateShrouds(mainmast, getDeckWidthAtZ(mainmast.base.z));
+
+
+    // --- RUNNING RIGGING (Tali Kontrol Dinamis) ---
+    std::cout << "  - Memasang Running Rigging..." << std::endl;
+    // 1. Peak Halyards (Mengangkat ujung gaff)
+    generateRailSegment(foremast.gaff_tip, foremast.top, thin_rope_radius, vertices, indices);
+    generateRailSegment(mainmast.gaff_tip, mainmast.top, thin_rope_radius, vertices, indices);
+
+    // 2. Throat Halyards (Mengangkat pangkal gaff)
+    generateRailSegment(foremast.gaff_base, foremast.top, thin_rope_radius, vertices, indices);
+    generateRailSegment(mainmast.gaff_base, mainmast.top, thin_rope_radius, vertices, indices);
+
+    // 3. Main Sheets (Tali pengontrol utama layar)
+    // Ini adalah sistem katrol yang kompleks, kita simulasikan
+    glm::vec3 sheet_point_deck_left = {-2.0f, getDeckYAtZ(-22.0f)+0.8f, -22.0f};
+    glm::vec3 sheet_point_deck_right = {2.0f, getDeckYAtZ(-22.0f)+0.8f, -22.0f};
+    generateRailSegment(mainmast.boom_tip, sheet_point_deck_left, thin_rope_radius, vertices, indices);
+    generateRailSegment(mainmast.boom_tip, sheet_point_deck_right, thin_rope_radius, vertices, indices);
+    
+    // 4. Topping Lifts (Menahan boom agar tidak jatuh)
+    generateRailSegment(foremast.boom_tip, foremast.top, thin_rope_radius, vertices, indices);
+    generateRailSegment(mainmast.boom_tip, mainmast.top, thin_rope_radius, vertices, indices);
 }
 
 void generateRudder() {
@@ -443,11 +863,27 @@ void generateAftCabin() {
 }
 
 void generatePortholes() {
+    float wall_thickness = 0.2f;
+    float porthole_radius = 0.3f;
+    int sides = 12;
+
     for(float z = -10.0f; z < 15.0f; z += 4.0f) {
         float y = getDeckYAtZ(z) - 2.0f;
-        float x = getDeckWidthAtZ(z) + 0.05f;
-        generateCylinder({x, y, z}, 0.1f, 0.3f, 12, vertices, indices);
-        generateCylinder({-x, y, z}, 0.1f, 0.3f, 12, vertices, indices);
+        float x_pos = getDeckWidthAtZ(z);
+        
+        // Jendela Kanan
+        glm::vec3 right_center = {x_pos, y, z};
+        glm::vec3 right_orientation = {1.0f, 0.0f, 0.0f};
+        // Hitung titik awal agar jendela tetap di tengah
+        glm::vec3 right_start_pos = right_center - (right_orientation * (wall_thickness / 2.0f));
+        generateCylinder(right_start_pos, wall_thickness, porthole_radius, sides, vertices, indices, right_orientation);
+
+        // Jendela Kiri
+        glm::vec3 left_center = {-x_pos, y, z};
+        glm::vec3 left_orientation = {-1.0f, 0.0f, 0.0f};
+        // Hitung titik awal agar jendela tetap di tengah
+        glm::vec3 left_start_pos = left_center - (left_orientation * (wall_thickness / 2.0f));
+        generateCylinder(left_start_pos, wall_thickness, porthole_radius, sides, vertices, indices, left_orientation);
     }
 }
 
@@ -666,6 +1102,7 @@ void exportToObj(const char* filename) {
 
 int main(int argc, char** argv) {
     glutInit(&argc, argv);
+    srand(time(NULL));
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
     glutInitWindowSize(1280, 960);
     glutCreateWindow("Kapal Phinisi Modern - v2.8 The Grand Finale");
@@ -684,14 +1121,27 @@ int main(int argc, char** argv) {
     std::cout << "Lambung selesai." << std::endl;
     generateAftCabin();
     std::cout << "Kabin mewah belakang terpasang." << std::endl;
-    generateDeckPlanking();
+    // generateDeckPlanking();
     std::cout << "Papan dek terpasang." << std::endl;
-    generateMastsAndSpars();
-    std::cout << "Tiang dan spar terpasang." << std::endl;
+    std::cout << "Platform bowsprit kompleks sedang dibangun..." << std::endl;
+    glm::vec3 bowsprit_tip = generateBowspritPlatform(); // Panggil fungsi baru & simpan posisi ujungnya
+    std::cout << "Platform bowsprit selesai." << std::endl;
+    generateSideNetting(true, vertices, indices);  // Jaring sisi kanan
+    generateSideNetting(false, vertices, indices); // Jaring sisi kiri
     generateSails();
     std::cout << "Layar terkembang." << std::endl;
-    generateRiggingAndDetails();
-    std::cout << "Tali-temali kompleks selesai." << std::endl;
+    std::cout << "Tiang dan spar sedang dibuat..." << std::endl;
+    MastGeometry foremast_geo = generateSingleMast({0.0f, getDeckYAtZ(12.0f), 12.0f}, 45.0f, true);
+    MastGeometry mainmast_geo = generateSingleMast({0.0f, getDeckYAtZ(-12.0f), -12.0f}, 40.0f, false);
+    std::cout << "Tiang dan spar terpasang." << std::endl;
+    std::cout << "Tali-temali sedang dipasang secara presisi..." << std::endl;
+    generateRigging_Phinisi(foremast_geo, mainmast_geo, bowsprit_tip);
+    std::cout << "Tali-temali presisi selesai." << std::endl;
+    // Tiang depan: Orientasi ke KIRI (vektor X negatif)
+    generateMastLadder(foremast_geo.base, 45.0f, 0.45f, {-1.0f, 0.0f, 0.0f}, vertices, indices);
+    
+    // Tiang utama: Orientasi ke DEPAN (vektor Z positif)
+    generateMastLadder(mainmast_geo.base, 40.0f, 0.45f, {0.0f, 0.0f, 1.0f}, vertices, indices);
     generateRudder();
     std::cout << "Kemudi terpasang." << std::endl;
     generateDeckRailings();
@@ -700,8 +1150,9 @@ int main(int argc, char** argv) {
     std::cout << "Jangkar terpasang." << std::endl;
     generatePortholes();
     std::cout << "Jendela lambung terpasang." << std::endl;
-    generateSunLoungers();
-    std::cout << "Perabotan mewah ditambahkan." << std::endl;
+    generateDeckhouse();
+    // generateSunLoungers();
+    // std::cout << "Perabotan mewah ditambahkan." << std::endl;
 
     recalculateNormals(vertices, indices, normals);
     recalculateNormals(sail_vertices, sail_indices, sail_normals);
