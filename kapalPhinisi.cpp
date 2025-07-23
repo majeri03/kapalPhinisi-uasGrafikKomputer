@@ -52,10 +52,10 @@ GLfloat wood_specular[] = {0.05f, 0.05f, 0.05f, 1.0f};
 GLfloat wood_shininess[] = {10.0f};
 
 // REVISI: Warna layar diubah menjadi biru tua
-GLfloat sail_ambient[] = {0.05f, 0.1f, 0.2f, 1.0f};
-GLfloat sail_diffuse[] = {0.1f, 0.2f, 0.4f, 1.0f};
+GLfloat sail_ambient[] = {0.4f, 0.35f, 0.28f, 1.0f};
+GLfloat sail_diffuse[] = {0.8f, 0.7f, 0.55f, 1.0f};
 GLfloat sail_specular[] = {0.1f, 0.1f, 0.1f, 1.0f};
-GLfloat sail_shininess[] = {30.0f};
+GLfloat sail_shininess[] = {20.0f};
 
 // ===================================================================
 // STRUKTUR & BLUEPRINT DASAR
@@ -581,6 +581,283 @@ void generateSideNetting(bool is_right_side, std::vector<glm::vec3>& vert_ref, s
         }
     }
 }
+
+// ===================================================================
+// FUNGSI BARU: GENERATE SATU BUAH TONG KAYU DETAIL
+// ===================================================================
+void generateBarrel(glm::vec3 base_pos, float height, float mid_radius, float end_radius, int segments, int slices, std::vector<glm::vec3>& vert_ref, std::vector<unsigned int>& ind_ref)
+{
+    // Definisikan kurva profil samping tong menggunakan Bezier
+    glm::vec2 P0(end_radius, 0.0f);
+    glm::vec2 P1(mid_radius, height * 0.25f);
+    glm::vec2 P2(mid_radius, height * 0.75f);
+    // ================================================================================
+    // PERBAIKAN DI SINI: Seharusnya glm::vec2, bukan glm::vec3
+    // ================================================================================
+    glm::vec2 P3(end_radius, height);
+
+    auto getProfilePoint = [&](float t) {
+        float u = 1.0f - t;
+        float tt = t * t;
+        float uu = u * u;
+        float uuu = uu * u;
+        float ttt = tt * t;
+        return uuu * P0 + 3.0f * uu * t * P1 + 3.0f * u * tt * P2 + ttt * P3;
+    };
+
+    // Generate vertices dengan memutar profil
+    int base_index = vert_ref.size();
+    for (int i = 0; i <= slices; ++i) {
+        float t = static_cast<float>(i) / slices;
+        glm::vec2 profile_pt = getProfilePoint(t);
+        for (int j = 0; j <= segments; ++j) {
+            float angle = 2.0f * M_PI * j / segments;
+            glm::vec3 point(profile_pt.x * cosf(angle), profile_pt.y, profile_pt.x * sinf(angle));
+            vert_ref.push_back(base_pos + point);
+        }
+    }
+
+    // Generate indices untuk badan tong
+    for (int i = 0; i < slices; ++i) {
+        for (int j = 0; j < segments; ++j) {
+            int row1 = i * (segments + 1);
+            int row2 = (i + 1) * (segments + 1);
+            ind_ref.push_back(base_index + row1 + j);
+            ind_ref.push_back(base_index + row2 + j + 1);
+            ind_ref.push_back(base_index + row1 + j + 1);
+            
+            ind_ref.push_back(base_index + row1 + j);
+            ind_ref.push_back(base_index + row2 + j);
+            ind_ref.push_back(base_index + row2 + j + 1);
+        }
+    }
+
+    // Generate tutup atas tong
+    int top_center_idx = vert_ref.size();
+    vert_ref.push_back(base_pos + glm::vec3(0, height, 0));
+    int top_ring_start = base_index + slices * (segments + 1);
+    for (int i = 0; i < segments; i++) {
+        ind_ref.push_back(top_center_idx);
+        ind_ref.push_back(top_ring_start + i + 1);
+        ind_ref.push_back(top_ring_start + i);
+    }
+    
+    // Generate Cincin Logam
+    float hoop_heights[] = {height * 0.05f, height * 0.15f, height * 0.85f, height * 0.95f};
+    float hoop_thickness = 0.05f;
+    for(float h : hoop_heights) {
+        float t = h / height;
+        float r = getProfilePoint(t).x + 0.01f;
+        generateCylinder(base_pos + glm::vec3(0, h - (hoop_thickness/2), 0), hoop_thickness, r, segments, vertices, indices);
+    }
+}
+
+// ===================================================================
+// FUNGSI BARU: GENERATE AREA MAKAN DI ATAP DECKHOUSE
+// ===================================================================
+void generateRooftopDining() {
+    std::cout << "    -> Membangun area makan mewah di atap..." << std::endl;
+
+    // --- Ambil kembali posisi & ukuran atap dari generateDeckhouse ---
+    glm::vec3 deckhouse_base_pos = {-3.0f, getDeckYAtZ(2.5f), -4.0f};
+    glm::vec3 deckhouse_body_size = {6.0f, 2.5f, 9.0f};
+    glm::vec3 roof_pos = deckhouse_base_pos + glm::vec3(-0.2f, deckhouse_body_size.y, -0.2f);
+    glm::vec3 roof_size = {deckhouse_body_size.x + 0.4f, 0.2f, deckhouse_body_size.z + 0.4f};
+    float rooftop_y = roof_pos.y + roof_size.y;
+
+    // --- 1. Buat Meja Makan ---
+    float table_height = 0.8f;
+    float table_length = 4.0f;
+    float table_width = 1.5f;
+    glm::vec3 table_center_pos = {roof_pos.x + roof_size.x / 2.0f, rooftop_y, roof_pos.z + roof_size.z / 2.0f};
+    glm::vec3 tabletop_pos = table_center_pos + glm::vec3(-table_length/2, table_height, -table_width/2);
+    generateBox(tabletop_pos, {table_length, 0.1f, table_width}, vertices, indices);
+    generateBox(tabletop_pos + glm::vec3(0.1f, -table_height, 0.1f), {0.2f, table_height, 0.2f}, vertices, indices);
+    generateBox(tabletop_pos + glm::vec3(table_length - 0.3f, -table_height, 0.1f), {0.2f, table_height, 0.2f}, vertices, indices);
+    generateBox(tabletop_pos + glm::vec3(0.1f, -table_height, table_width - 0.3f), {0.2f, table_height, 0.2f}, vertices, indices);
+    generateBox(tabletop_pos + glm::vec3(table_length - 0.3f, -table_height, table_width - 0.3f), {0.2f, table_height, 0.2f}, vertices, indices);
+
+    // --- 2. Buat Bangku Panjang (2 buah) ---
+    float bench_height = 0.5f;
+    glm::vec3 bench1_pos = tabletop_pos + glm::vec3(0, -table_height, -table_width/2 - 0.5f);
+    generateBox(bench1_pos, {table_length, 0.1f, 0.4f}, vertices, indices);
+    generateBox(bench1_pos + glm::vec3(0,0,0), {table_length, -bench_height, 0.1f}, vertices, indices);
+    generateBox(bench1_pos + glm::vec3(0,0,0.3f), {table_length, -bench_height, 0.1f}, vertices, indices);
+    glm::vec3 bench2_pos = tabletop_pos + glm::vec3(0, -table_height, table_width + 0.1f);
+    generateBox(bench2_pos, {table_length, 0.1f, 0.4f}, vertices, indices);
+    generateBox(bench2_pos + glm::vec3(0,0,0), {table_length, -bench_height, 0.1f}, vertices, indices);
+    generateBox(bench2_pos + glm::vec3(0,0,0.3f), {table_length, -bench_height, 0.1f}, vertices, indices);
+
+    // --- 3. Ornamen: Pergola / Rangka Peneduh ---
+    float pergola_height = 1.5f; // Ketinggian dikurangi
+    
+    // Posisi tiang
+    glm::vec3 p1 = roof_pos + glm::vec3(0.5f, roof_size.y, 0.5f);
+    glm::vec3 p2 = roof_pos + glm::vec3(roof_size.x - 0.5f, roof_size.y, 0.5f);
+    glm::vec3 p3 = roof_pos + glm::vec3(roof_size.x - 0.5f, roof_size.y, roof_size.z - 0.5f);
+    glm::vec3 p4 = roof_pos + glm::vec3(0.5f, roof_size.y, roof_size.z - 0.5f);
+
+    // Tambahkan penutup atap pergola
+    float cover_height = pergola_height + 0.1f; // Sedikit lebih tinggi dari tiang
+    generateBox(roof_pos + glm::vec3(0.3f, roof_size.y + pergola_height - 0.1f, 0.3f),
+               {roof_size.x - 0.6f, 0.1f, roof_size.z - 0.6f}, 
+               vertices, indices);
+
+    // Tambahkan jalur silang untuk support
+    float cross_height = pergola_height - 0.2f;
+    for(float z = 0.5f; z < roof_size.z - 0.5f; z += 1.0f) {
+        generateBox(roof_pos + glm::vec3(0.3f, roof_size.y + cross_height, z),
+                   {roof_size.x - 0.6f, 0.05f, 0.05f},
+                   vertices, indices);
+    }
+    
+    // ================================================================================
+    // PERBAIKAN DI SINI: Menggunakan generateCylinder, bukan createCylinder
+    // ================================================================================
+    generateCylinder(p1, pergola_height, 0.08f, 8, vertices, indices);
+    generateCylinder(p2, pergola_height, 0.08f, 8, vertices, indices);
+    generateCylinder(p3, pergola_height, 0.08f, 8, vertices, indices);
+    generateCylinder(p4, pergola_height, 0.08f, 8, vertices, indices);
+
+    // Balok-balok atas
+    glm::vec3 top1 = p1 + glm::vec3(0,pergola_height,0);
+    glm::vec3 top2 = p2 + glm::vec3(0,pergola_height,0);
+    glm::vec3 top3 = p3 + glm::vec3(0,pergola_height,0);
+    glm::vec3 top4 = p4 + glm::vec3(0,pergola_height,0);
+    generateBox(top1 + glm::vec3(0,0,-0.1f), {glm::distance(top1,top2), 0.1f, 0.2f}, vertices, indices);
+    generateBox(top4 + glm::vec3(0,0,-0.1f), {glm::distance(top4,top3), 0.1f, 0.2f}, vertices, indices);
+    generateBox(top1 + glm::vec3(-0.1f,0,0), {0.2f, 0.1f, glm::distance(top1,top4)}, vertices, indices);
+    generateBox(top2 + glm::vec3(-0.1f,0,0), {0.2f, 0.1f, glm::distance(top2,top3)}, vertices, indices);
+}
+
+// ===================================================================
+// FUNGSI BARU: MENGATUR POSISI Tumpukan TONG
+// ===================================================================
+void generateBarrelCluster(glm::vec3 cluster_base_pos) { // <-- Terima posisi sebagai parameter
+    std::cout << "    -> Menambahkan tumpukan tong di dek..." << std::endl;
+    
+    // Parameter Tong (tidak berubah)
+    float h = 1.2f, mid_r = 0.7f, end_r = 0.6f;
+    int seg = 20, sli = 10;
+
+    // Tong 1: Tengah belakang
+    generateBarrel(cluster_base_pos, h, mid_r, end_r, seg, sli, vertices, indices);
+    
+    // Tong 2: Kanan depan
+    generateBarrel(cluster_base_pos + glm::vec3(1.0f, 0, 0.5f), h, mid_r, end_r, seg, sli, vertices, indices);
+
+    // Tong 3: Kiri depan (sedikit miring)
+    int pre_tilt_v_count = vertices.size();
+    glm::vec3 tilted_barrel_pos = cluster_base_pos + glm::vec3(-1.0f, 0, 0.5f); // Simpan posisi tong miring
+    generateBarrel(tilted_barrel_pos, h, mid_r, end_r, seg, sli, vertices, indices);
+    int post_tilt_v_count = vertices.size();
+
+    // Terapkan rotasi pada vertices tong terakhir
+    glm::mat4 rotation_matrix = glm::rotate(glm::mat4(1.0f), glm::radians(15.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    for (int i = pre_tilt_v_count; i < post_tilt_v_count; ++i) {
+        vertices[i] -= tilted_barrel_pos; // Pindahkan ke titik pivot (0,0,0)
+        vertices[i] = glm::vec3(rotation_matrix * glm::vec4(vertices[i], 1.0f));
+        vertices[i] += tilted_barrel_pos; // Kembalikan ke posisi semula
+    }
+}
+
+// ===================================================================
+// FUNGSI BARU: GENERATE GULUNGAN TALI SPIRAL
+// ===================================================================
+void generateCoiledRope(glm::vec3 center_pos, float max_radius, int coils, float rope_radius, std::vector<glm::vec3>& vert_ref, std::vector<unsigned int>& ind_ref) {
+    std::cout << "    -> Menggulung tali di dek..." << std::endl;
+    
+    int segments_per_coil = 30;
+    int total_segments = coils * segments_per_coil;
+    float angle_step = 2.0f * M_PI / segments_per_coil;
+    
+    glm::vec3 p1 = center_pos;
+
+    for (int i = 1; i <= total_segments; ++i) {
+        float current_angle = i * angle_step;
+        float current_radius = (static_cast<float>(i) / total_segments) * max_radius;
+        
+        glm::vec3 p2 = center_pos + glm::vec3(current_radius * cosf(current_angle), i * 0.001f, current_radius * sinf(current_angle));
+        
+        // ================================================================================
+        // PERBAIKAN DI SINI: Menggunakan generateCylinder dengan parameter yang benar
+        // ================================================================================
+        glm::vec3 dir = p2 - p1;
+        if (glm::length(dir) > 0.001f) {
+            generateCylinder(p1, glm::distance(p1, p2), rope_radius, 4, vert_ref, ind_ref, glm::normalize(dir));
+        }
+        
+        p1 = p2;
+    }
+}
+
+// ===================================================================
+// FUNGSI BARU: MENEMPATKAN BEBERAPA GULUNGAN TALI
+// ===================================================================
+void placeCoiledRopes() {
+    // Tali di dekat tiang utama (mainmast)
+    glm::vec3 mainmast_base = {0.0f, getDeckYAtZ(-12.0f), -12.0f};
+    generateCoiledRope(mainmast_base + glm::vec3(1.5f, 0.0f, 0.0f), 0.8f, 5, 0.04f, vertices, indices);
+
+    // Tali di dekat tiang depan (foremast)
+    glm::vec3 foremast_base = {0.0f, getDeckYAtZ(12.0f), 12.0f};
+    generateCoiledRope(foremast_base + glm::vec3(-1.5f, 0.0f, 0.0f), 0.8f, 5, 0.04f, vertices, indices);
+}
+
+// ===================================================================
+// FUNGSI UTILITAS BARU: GENERATE BENTUK TORUS (CINCIN)
+// ===================================================================
+void generateTorus(glm::vec3 center, float major_radius, float minor_radius, int major_segments, int minor_segments, std::vector<glm::vec3>& vert_ref, std::vector<unsigned int>& ind_ref) {
+    std::cout << "    -> Membuat pelampung penyelamat..." << std::endl;
+    int base_index = vert_ref.size();
+
+    // Generate vertices
+    for (int i = 0; i <= major_segments; i++) {
+        float theta = 2.0f * M_PI * static_cast<float>(i) / major_segments;
+        glm::vec3 major_pos(major_radius * cosf(theta), 0, major_radius * sinf(theta));
+
+        for (int j = 0; j <= minor_segments; j++) {
+            float phi = 2.0f * M_PI * static_cast<float>(j) / minor_segments;
+            glm::vec3 normal = glm::normalize(glm::vec3(cosf(theta) * cosf(phi), sinf(phi), sinf(theta) * cosf(phi)));
+            vert_ref.push_back(center + major_pos + normal * minor_radius);
+        }
+    }
+
+    // Generate indices
+    for (int i = 0; i < major_segments; i++) {
+        for (int j = 0; j < minor_segments; j++) {
+            int p1 = i * (minor_segments + 1) + j;
+            int p2 = i * (minor_segments + 1) + (j + 1);
+            int p3 = (i + 1) * (minor_segments + 1) + j;
+            int p4 = (i + 1) * (minor_segments + 1) + (j + 1);
+            ind_ref.push_back(base_index + p1); ind_ref.push_back(base_index + p3); ind_ref.push_back(base_index + p2);
+            ind_ref.push_back(base_index + p2); ind_ref.push_back(base_index + p3); ind_ref.push_back(base_index + p4);
+        }
+    }
+}
+
+// ===================================================================
+// FUNGSI BARU: MENEMPATKAN PELAMPUNG PENYELAMAT
+// ===================================================================
+void placeLifebuoys() {
+    float deck_y = getDeckYAtZ(-15.0f) + 0.8f;
+    float deck_width = getDeckWidthAtZ(-15.0f);
+
+    // Posisi di dinding kanan kabin belakang
+    glm::vec3 pos1 = {-deck_width * 0.9f - 0.1f, deck_y + 1.5f, -17.0f};
+    
+    int pre_rot_v_count = vertices.size();
+    generateTorus(pos1, 0.4f, 0.08f, 30, 15, vertices, indices);
+    int post_rot_v_count = vertices.size();
+
+    // Rotasi pelampung agar berdiri tegak
+    glm::mat4 rotation_matrix = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    for (int i = pre_rot_v_count; i < post_rot_v_count; ++i) {
+        vertices[i] -= pos1;
+        vertices[i] = glm::vec3(rotation_matrix * glm::vec4(vertices[i], 1.0f));
+        vertices[i] += pos1;
+    }
+}
 // ===================================================================
 // FUNGSI UTILITAS BARU: GENERATE SILINDER DENGAN ORIENTASI APAPUN
 // ===================================================================
@@ -808,13 +1085,74 @@ void generateDeckRailings() {
     generateRailSegment(right_posts.back(), left_posts.back(), post_radius, vertices, indices);
 }
 
+// ===================================================================
+// FUNGSI UPGRADE: GENERATE PAPAN DEK DINAMIS SESUAI BENTUK LAMBUNG
+// ===================================================================
 void generateDeckPlanking() {
-    float plank_width = 0.2f;
-    float plank_height = 0.05f;
-    for(float x = -getDeckWidthAtZ(0.0f) + plank_width; x < getDeckWidthAtZ(0.0f); x += plank_width) {
-        generateBox({x, getDeckYAtZ(-20.0f) - plank_height, -20.0f}, {plank_width, plank_height, 45.0f}, vertices, indices);
+    std::cout << "    -> Memasang papan dek secara dinamis..." << std::endl;
+    
+    // --- Parameter Papan ---
+    const float plank_width = 0.2f;
+    const float plank_height = 0.05f;
+    const float plank_segment_length = 1.0f; // Panjang setiap segmen papan
+
+    // Loop dari buritan (-22) ke haluan (+25)
+    for (float z = -22.0f; z < 25.0f; z += plank_segment_length) {
+        
+        // Di setiap posisi 'z', dapatkan lebar dek yang sebenarnya secara dinamis
+        float current_deck_width = getDeckWidthAtZ(z);
+        // Dapatkan juga ketinggian dek di posisi 'z'
+        float current_deck_y = getDeckYAtZ(z) - plank_height;
+
+        // Loop dari sisi kiri ke kanan dek, sesuai lebar yang didapat
+        for (float x = -current_deck_width; x < current_deck_width; x += plank_width) {
+            
+            // Cek agar papan terakhir tidak melebihi batas
+            float current_plank_width = plank_width;
+            if (x + plank_width > current_deck_width) {
+                current_plank_width = current_deck_width - x;
+            }
+
+            // Buat satu segmen papan pendek yang pas di dalam lambung
+            generateBox({x, current_deck_y, z}, {current_plank_width, plank_height, plank_segment_length}, vertices, indices);
+        }
     }
 }
+
+// ===================================================================
+// FUNGSI BARU: GENERATE GUDANG PENYIMPANAN DI DEK DEPAN
+// ===================================================================
+// ===================================================================
+// FUNGSI UPGRADE: GENERATE KOTAK PENYIMPANAN RAMPING
+// ===================================================================
+void generateStorageShed() {
+    std::cout << "    -> Membangun kotak penyimpanan dek..." << std::endl;
+
+    // --- Posisi & Dimensi Kotak Penyimpanan (DISESUAIKAN) ---
+    // Ditempatkan di sisi kanan (starboard) dari tiang depan (foremast)
+    
+    float box_length = 5.0f; // Diperpanjang dari 4.0f
+    float box_width = 1.2f;  // Dilebarkan dari 0.8f
+    float box_height = 2.2f; // Ditinggikan dari 1.0f
+    float z_pos = 10.0f;      // Sedikit digeser ke belakang
+
+    // Hitung posisi X agar menempel di dekat pagar sisi kanan
+    float deck_edge_x = getDeckWidthAtZ(z_pos);
+    // Margin dari pagar diperbesar menjadi 0.5f (sebelumnya 0.2f) agar tidak bentrok
+    float box_x_pos = deck_edge_x - box_width - 2.0f; 
+
+    // Posisi dasar kotak
+    glm::vec3 base_pos = {box_x_pos, getDeckYAtZ(z_pos), z_pos};
+    
+    // --- 1. Buat Badan Kotak ---
+    generateBox(base_pos, {box_width, box_height, box_length}, vertices, indices);
+
+    // --- 2. Buat Tutup Kotak (sedikit lebih besar) ---
+    glm::vec3 lid_pos = base_pos + glm::vec3(-0.05f, box_height, -0.05f);
+    glm::vec3 lid_size = {box_width + 0.1f, 0.1f, box_length + 0.1f};
+    generateBox(lid_pos, lid_size, vertices, indices);
+}
+
 
 void generateAnchor() {
     glm::vec3 base_pos = {getDeckWidthAtZ(22.0f) + 0.1f, getDeckYAtZ(22.0f) - 1.0f, 22.0f};
@@ -1121,7 +1459,7 @@ int main(int argc, char** argv) {
     std::cout << "Lambung selesai." << std::endl;
     generateAftCabin();
     std::cout << "Kabin mewah belakang terpasang." << std::endl;
-    // generateDeckPlanking();
+    generateDeckPlanking();
     std::cout << "Papan dek terpasang." << std::endl;
     std::cout << "Platform bowsprit kompleks sedang dibangun..." << std::endl;
     glm::vec3 bowsprit_tip = generateBowspritPlatform(); // Panggil fungsi baru & simpan posisi ujungnya
@@ -1151,6 +1489,12 @@ int main(int argc, char** argv) {
     generatePortholes();
     std::cout << "Jendela lambung terpasang." << std::endl;
     generateDeckhouse();
+    generateRooftopDining();
+    generateBarrelCluster({0.0f, getDeckYAtZ(-8.0f), -8.0f});
+    generateBarrelCluster({-2.5f, getDeckYAtZ(10.0f), 10.0f});
+    generateStorageShed();
+    placeCoiledRopes();
+    placeLifebuoys();
     // generateSunLoungers();
     // std::cout << "Perabotan mewah ditambahkan." << std::endl;
 
