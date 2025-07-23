@@ -63,8 +63,8 @@ struct HullCrossSection
 
 // DEFINISI BLUEPRINT KURVA (TETAP SAMA)
 HullCrossSection bowSection = { {0.0f, 0.0f}, {1.0f, 2.0f}, {3.0f, 7.5f}, {2.5f, 8.5f} };
-HullCrossSection midSection = { {0.0f, 0.0f}, {4.0f, 1.0f}, {6.0f, 7.0f}, {5.5f, 8.0f} };
-HullCrossSection sternSection = { {0.0f, 0.0f}, {5.0f, 0.5f}, {7.0f, 6.0f}, {7.0f, 7.0f} };
+HullCrossSection midSection = { {0.0f, 0.0f}, {4.5f, -1.5f}, {6.0f, 7.0f}, {5.5f, 8.0f} }; // P1.y diturunkan secara signifikan
+HullCrossSection sternSection = { {0.0f, 0.0f}, {5.0f, -1.0f}, {7.0f, 6.0f}, {7.0f, 7.0f} };
 
 // ===================================================================
 // STRUKTUR DATA BARU UNTUK MESH 3D
@@ -988,27 +988,20 @@ int main(int argc, char** argv) {
 
     // Jib 3 (Bawah) - Menempel ke ujung bowsprit
     generateSailMesh(mast_p2, mast_p3,bowsprit_tip, bowsprit_tip, 1, sail_vertices, sail_indices);
-    // ...existing code...
     generateRailSegment(mast_top, bowsprit_tip, 0.08f); // Rail forestay utama
     generateRailSegment(mast_p1, forestay_p1, 0.08f);   // Rail jib 1
     generateRailSegment(mast_p2, forestay_p2, 0.08f);   // Rail jib 2
     generateRailSegment(mast_p3, bowsprit_tip, 0.08f);  // Rail jib 3
-    // ...existing code...
-    // =================================================================
-    // =================================================================
-    // --- TAHAP FINAL: TALI-TEMALI (RIGGING) ---
+    
     generateRigging();
     generateLadders();
     generateCabinLadder();
-    // =================================================================
-    // =================================================================
+    
 
-    recalculateAllNormals(); // <-- FIX: Panggil fungsi kalkulasi normal di sini
+    recalculateAllNormals(); 
     recalculateSailNormals();
-    // Daftarkan callback dan mulai loop
     glutDisplayFunc(display);
-    // glutTimerFunc(0, timer, 0); 
-    // ---- TAMBAHKAN 3 BARIS INI ----
+
     exportToObj("F:\\CODING\\CC++\\kapalPhinisi\\kapal_phinisi.obj");
     glutKeyboardFunc(keyboard);
     glutMouseFunc(mouseButton);

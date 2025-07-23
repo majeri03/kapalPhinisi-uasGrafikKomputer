@@ -3,3 +3,8 @@
 
 # Abaikan file .obj
 *.obj
+
+# Folder build/output
+build/
+dist/
+out/
