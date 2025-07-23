@@ -1,0 +1,5 @@
+# Abaikan file .exe
+*.exe
+
+# Abaikan file .obj
+*.obj
